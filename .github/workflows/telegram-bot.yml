@@ -1,0 +1,75 @@
+name: Telegram PDF to GitHub
+
+on:
+  repository_dispatch:
+    types: [telegram-pdf]
+
+jobs:
+  process-pdf:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Download PDF
+        run: |
+          mkdir -p pdfs
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git pull --rebase
+          
+          CLEAN_FILENAME="${{ github.event.client_payload.file_name }}"
+          PDF_FILENAME="pdfs/${CLEAN_FILENAME}"
+          
+          echo "Downloading from: ${{ github.event.client_payload.pdf_url }}"
+          echo "Saving as: $PDF_FILENAME"
+          echo "Chat ID: ${{ github.event.client_payload.chat_id }}"
+          
+          # Download PDF
+          curl -L --progress-bar "${{ github.event.client_payload.pdf_url }}" -o "$PDF_FILENAME"
+          
+          if [ -f "$PDF_FILENAME" ]; then
+            echo "✅ PDF downloaded successfully"
+            git add .
+            git commit -m "Add PDF: $CLEAN_FILENAME"
+            git pull --rebase
+            if git push; then
+              echo "✅ PDF committed successfully"
+              echo "UPLOAD_SUCCESS=true" >> $GITHUB_ENV
+              echo "UPLOAD_FILENAME=$CLEAN_FILENAME" >> $GITHUB_ENV
+            else
+              echo "❌ Git push failed"
+              echo "UPLOAD_SUCCESS=false" >> $GITHUB_ENV
+            fi
+          else
+            echo "❌ Failed to download PDF"
+            echo "UPLOAD_SUCCESS=false" >> $GITHUB_ENV
+            exit 1
+          fi
+
+      - name: Send Telegram notification
+        if: env.UPLOAD_SUCCESS == 'true'
+        run: |
+          CHAT_ID="${{ github.event.client_payload.chat_id }}"
+          FILENAME="${{ github.event.client_payload.file_name }}"
+          REPO_URL="https://github.com/${{ github.repository }}/tree/main/pdfs"
+          
+          echo "Sending notification to chat ID: $CHAT_ID"
+          echo "File: $FILENAME"
+          echo "Repo: $REPO_URL"
+          
+          MESSAGE="✅ **Upload Complete!**
+
+• File: $FILENAME
+• Repository: ${{ github.repository }}
+• Status: Successfully uploaded!
+
+📁 View: $REPO_URL"
+
+          curl -s -X POST \
+            "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=$CHAT_ID" \
+            -d "text=$MESSAGE" \
+            -d "parse_mode=Markdown"
